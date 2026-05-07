@@ -55,7 +55,15 @@ class CNOPipeline:
 
         # 1. INPUT
         cls = self.input.classify(request, modality_hint=modality_hint)
-        cls_payload = {"modality": cls.modality.value, "request_type": cls.request_type.value, "tone": cls.tone.value, "raw_length": cls.raw_length}
+        cls_payload = {
+            "modality": cls.modality.value,
+            "request_type": cls.request_type.value,
+            "tone": cls.tone.value,
+            "raw_length": cls.raw_length,
+            "modality_confidence":     cls.modality_confidence,
+            "request_type_confidence": cls.request_type_confidence,
+            "tone_confidence":         cls.tone_confidence,
+        }
         tags.append(f"[Input Node: modality={cls.modality.value}, type={cls.request_type.value}, tone={cls.tone.value}]")
         self._audit(run_id, 1, "input", {"request": request[:200]}, cls_payload)
 
@@ -77,7 +85,11 @@ class CNOPipeline:
 
         # 4. PERSONA
         persona = self.persona.select(cls, route)
-        persona_payload = {"style": persona.style.value, "rationale": persona.rationale}
+        persona_payload = {
+            "style": persona.style.value,
+            "rationale": persona.rationale,
+            "confidence": persona.confidence,
+        }
         tags.append(f"[Persona Node: style={persona.style.value} ({persona.rationale})]")
         self._audit(run_id, 4, "persona", {"classification": cls_payload, "routing": route_payload}, persona_payload)
 
@@ -85,7 +97,12 @@ class CNOPipeline:
         if not draft_response:
             draft_response = f"[draft based on {route.sublayer.value} routing of: {request[:100]}]"
         synth = self.synth.synthesize(draft_response, persona)
-        synth_payload = {"body": synth.body[:500], "clarity_score": synth.clarity_score, "style_applied": synth.style_applied}
+        synth_payload = {
+            "body": synth.body[:500],
+            "clarity_score": synth.clarity_score,
+            "style_applied": synth.style_applied,
+            "transforms": list(synth.transforms),
+        }
         tags.append(f"[Output Synth Node: clarity={synth.clarity_score}, style={synth.style_applied}]")
         self._audit(run_id, 5, "synth", {"draft": draft_response[:200], "persona": persona_payload}, synth_payload)
 

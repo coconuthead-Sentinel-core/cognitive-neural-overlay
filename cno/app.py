@@ -217,10 +217,13 @@ def run_single_node(node_name: str, body: dict[str, Any]):
 
 def _classification_dict(cls: InputClassification) -> dict:
     return {
-        "modality":     cls.modality.value,
-        "request_type": cls.request_type.value,
-        "tone":         cls.tone.value,
-        "raw_length":   cls.raw_length,
+        "modality":                cls.modality.value,
+        "request_type":            cls.request_type.value,
+        "tone":                    cls.tone.value,
+        "raw_length":              cls.raw_length,
+        "modality_confidence":     cls.modality_confidence,
+        "request_type_confidence": cls.request_type_confidence,
+        "tone_confidence":         cls.tone_confidence,
     }
 
 
@@ -274,7 +277,11 @@ def cno_process_stream(req: ProcessRequest, x_cno_session_id: str | None = Heade
 
         t3 = time.perf_counter()
         persona = PIPELINE.persona.select(cls, route)
-        persona_payload = {"style": persona.style.value, "rationale": persona.rationale}
+        persona_payload = {
+            "style": persona.style.value,
+            "rationale": persona.rationale,
+            "confidence": persona.confidence,
+        }
         yield _sse("node", {"step": 4, "node": "persona", "glyph": "🥥",
                             "elapsed_ms": _ms_since(t3), "output": persona_payload})
         if PIPELINE.audit:
@@ -285,8 +292,12 @@ def cno_process_stream(req: ProcessRequest, x_cno_session_id: str | None = Heade
         t4 = time.perf_counter()
         draft = req.draft_response or f"[draft based on {route.sublayer.value} routing of: {req.request[:100]}]"
         synth = PIPELINE.synth.synthesize(draft, persona)
-        synth_payload = {"body": synth.body[:500], "clarity_score": synth.clarity_score,
-                         "style_applied": synth.style_applied}
+        synth_payload = {
+            "body": synth.body[:500],
+            "clarity_score": synth.clarity_score,
+            "style_applied": synth.style_applied,
+            "transforms": list(synth.transforms),
+        }
         yield _sse("node", {"step": 5, "node": "synth", "glyph": "📤",
                             "elapsed_ms": _ms_since(t4), "output": synth_payload})
         if PIPELINE.audit:

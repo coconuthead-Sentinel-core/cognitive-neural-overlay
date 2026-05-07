@@ -20,6 +20,7 @@ from .nodes import (
     Modality,
 )
 from .audit import AuditLog
+from .sinks import load_sink_from_env
 
 
 @dataclass
@@ -39,10 +40,10 @@ class CNOPipelineResult:
 class CNOPipeline:
     """Linear 5-node CNO pipeline. Singleton-friendly."""
 
-    def __init__(self, audit: Optional[AuditLog] = None):
+    def __init__(self, audit: Optional[AuditLog] = None, memory: Optional[MemoryNode] = None):
         self.input    = InputNode()
         self.router   = RouterNode()
-        self.memory   = MemoryNode()
+        self.memory   = memory if memory is not None else MemoryNode()
         self.persona  = PersonaNode()
         self.synth    = OutputSynthNode()
         self.audit    = audit
@@ -123,4 +124,7 @@ class CNOPipeline:
         self.audit.record_node_crossing(run_id, step, node, payload_in, payload_out)
 
 
-PIPELINE = CNOPipeline(audit=AuditLog())
+PIPELINE = CNOPipeline(
+    audit=AuditLog(),
+    memory=MemoryNode(sink=load_sink_from_env()),
+)

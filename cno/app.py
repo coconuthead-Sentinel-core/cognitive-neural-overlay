@@ -20,7 +20,9 @@ from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from .config import SETTINGS
 from .logging_config import configure_logging
+from .middleware import APIKeyMiddleware, RateLimitMiddleware
 from .nodes import Modality, PersonaStyle, RequestType, Sublayer
 from .nodes.input_node import InputClassification, Tone
 from .nodes.persona_node import PersonaSelection
@@ -34,17 +36,28 @@ log = logging.getLogger("cno.app")
 
 app = FastAPI(
     title="Cognitive Neural Overlay (CNO)",
-    version="0.2.0",
+    version="0.3.0",
     description=(
         "Front-end overlay implementation of the 5 simulated nodes from "
         "the Sentinel Forge System Core Directive. CSTM_Lattice v1.0 aligned."
     ),
 )
 
-# CORS — wide open in dev; tighten via env in prod.
+# Middleware order matters: outermost = last added in Starlette.
+# We want CORS -> auth -> rate-limit (rate-limit closest to handler).
+app.add_middleware(
+    RateLimitMiddleware,
+    limit_per_minute=SETTINGS.rate_limit_per_minute,
+    bypass_paths=SETTINGS.auth_bypass_paths,
+)
+app.add_middleware(
+    APIKeyMiddleware,
+    api_key=SETTINGS.api_key,
+    bypass_paths=SETTINGS.auth_bypass_paths,
+)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=SETTINGS.allowed_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -58,7 +71,13 @@ class ProcessRequest(BaseModel):
 
 @app.get("/healthz", tags=["meta"])
 def healthz():
-    return {"status": "ok", "service": "cno", "version": "0.2.0"}
+    return {
+        "status": "ok",
+        "service": "cno",
+        "version": "0.3.0",
+        "auth_enabled":  SETTINGS.api_key is not None,
+        "rate_limit_per_minute": SETTINGS.rate_limit_per_minute,
+    }
 
 
 @app.post("/cno/process", tags=["pipeline"])

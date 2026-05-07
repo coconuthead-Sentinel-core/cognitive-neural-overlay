@@ -9,6 +9,7 @@ AuditLog is attached) persisted as one row per node crossing in SQLite.
 """
 
 from __future__ import annotations
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -48,6 +49,7 @@ class CNOPipeline:
 
     def process(self, request: str, draft_response: str = "", modality_hint: Modality | None = None) -> CNOPipelineResult:
         run_id = uuid.uuid4().hex
+        t0 = time.perf_counter()
         tags: list[str] = []
 
         # 1. INPUT
@@ -86,6 +88,8 @@ class CNOPipeline:
         tags.append(f"[Output Synth Node: clarity={synth.clarity_score}, style={synth.style_applied}]")
         self._audit(run_id, 5, "synth", {"draft": draft_response[:200], "persona": persona_payload}, synth_payload)
 
+        total_ms = int((time.perf_counter() - t0) * 1000)
+
         # Run header (one row per /cno/process call)
         if self.audit is not None:
             self.audit.record_run_header(
@@ -98,6 +102,7 @@ class CNOPipeline:
                 persona_style=persona.style.value,
                 clarity_score=synth.clarity_score,
                 synthesis_body=synth.body,
+                total_ms=total_ms,
             )
 
         return CNOPipelineResult(

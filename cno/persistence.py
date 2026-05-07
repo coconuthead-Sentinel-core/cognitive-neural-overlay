@@ -28,7 +28,8 @@ CREATE TABLE IF NOT EXISTS runs (
     sublayer        TEXT,
     persona_style   TEXT,
     clarity_score   INTEGER,
-    synthesis_body  TEXT
+    synthesis_body  TEXT,
+    total_ms        INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS audit_log (
@@ -49,10 +50,14 @@ CREATE INDEX IF NOT EXISTS idx_runs_ts      ON runs(ts DESC);
 
 
 def init_db(db_path: Path = DEFAULT_DB_PATH) -> None:
-    """Create tables if missing. Idempotent."""
+    """Create tables if missing + run idempotent migrations. Safe to call repeatedly."""
     db_path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(db_path) as conn:
         conn.executescript(SCHEMA)
+        # Migration: add total_ms to existing runs tables that predate it.
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(runs)").fetchall()}
+        if "total_ms" not in cols:
+            conn.execute("ALTER TABLE runs ADD COLUMN total_ms INTEGER")
         conn.commit()
 
 

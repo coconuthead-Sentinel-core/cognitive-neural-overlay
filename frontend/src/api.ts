@@ -55,6 +55,22 @@ export async function getRun(runId: string): Promise<RunDetail> {
   return res.json();
 }
 
+export interface AuditStats {
+  window: number;
+  window_size_actual: number;
+  total_runs: number;
+  latency_series: { ts: string; ms: number }[];
+  clarity_series: { ts: string; score: number }[];
+  sublayer_distribution: { sublayer: string; count: number }[];
+  persona_modality_matrix: { modality: string; persona_style: string; count: number }[];
+}
+
+export async function getStats(window = 50): Promise<AuditStats> {
+  const res = await fetch(`/cno/audit/stats?window=${window}`);
+  if (!res.ok) throw new Error(`getStats failed: ${res.status}`);
+  return res.json();
+}
+
 export async function process(request: string): Promise<ProcessResult> {
   const res = await fetch(`/cno/process`, {
     method: "POST",

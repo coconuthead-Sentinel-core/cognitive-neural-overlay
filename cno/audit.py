@@ -35,6 +35,7 @@ class RunHeader:
     persona_style:  str
     clarity_score:  int
     synthesis_body: str
+    total_ms:       Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -68,13 +69,15 @@ class AuditLog:
         persona_style: str,
         clarity_score: int,
         synthesis_body: str,
+        total_ms: Optional[int] = None,
     ) -> None:
         with get_conn(self.db_path) as conn:
             conn.execute(
                 """
                 INSERT INTO runs (run_id, ts, request, modality, request_type,
-                                  tone, sublayer, persona_style, clarity_score, synthesis_body)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                  tone, sublayer, persona_style, clarity_score,
+                                  synthesis_body, total_ms)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_id,
@@ -83,6 +86,7 @@ class AuditLog:
                     modality, request_type, tone,
                     sublayer, persona_style, clarity_score,
                     synthesis_body[:500],
+                    total_ms,
                 ),
             )
 
@@ -146,3 +150,60 @@ class AuditLog:
         with get_conn(self.db_path) as conn:
             conn.execute("DELETE FROM audit_log")
             conn.execute("DELETE FROM runs")
+
+    def get_stats(self, window: int = 50) -> dict:
+        """
+        Aggregated stats for dashboard widgets.
+
+        - latency_series / clarity_series: most recent `window` runs (oldest first)
+        - sublayer_distribution: counts by sublayer over the window
+        - persona_modality_matrix: list of {modality, persona_style, count} cells
+        - total_runs: lifetime count
+        """
+        with get_conn(self.db_path) as conn:
+            recent_rows = conn.execute(
+                """
+                SELECT run_id, ts, total_ms, clarity_score, sublayer, persona_style, modality
+                FROM runs
+                ORDER BY ts DESC
+                LIMIT ?
+                """,
+                (window,),
+            ).fetchall()
+
+            total_runs = conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0]
+
+        recent = list(reversed([dict(r) for r in recent_rows]))  # oldest -> newest
+
+        latency_series = [
+            {"ts": r["ts"], "ms": r["total_ms"]}
+            for r in recent if r["total_ms"] is not None
+        ]
+        clarity_series = [
+            {"ts": r["ts"], "score": r["clarity_score"]}
+            for r in recent if r["clarity_score"] is not None
+        ]
+
+        sublayer_counts: dict[str, int] = {}
+        for r in recent:
+            if r["sublayer"]:
+                sublayer_counts[r["sublayer"]] = sublayer_counts.get(r["sublayer"], 0) + 1
+
+        matrix: dict[tuple[str, str], int] = {}
+        for r in recent:
+            key = (r["modality"] or "?", r["persona_style"] or "?")
+            matrix[key] = matrix.get(key, 0) + 1
+        persona_modality_matrix = [
+            {"modality": m, "persona_style": p, "count": c}
+            for (m, p), c in sorted(matrix.items())
+        ]
+
+        return {
+            "window":                  window,
+            "window_size_actual":      len(recent),
+            "total_runs":              total_runs,
+            "latency_series":          latency_series,
+            "clarity_series":          clarity_series,
+            "sublayer_distribution":   [{"sublayer": k, "count": v} for k, v in sorted(sublayer_counts.items())],
+            "persona_modality_matrix": persona_modality_matrix,
+        }

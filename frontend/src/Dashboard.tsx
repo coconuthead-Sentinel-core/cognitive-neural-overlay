@@ -1,8 +1,9 @@
 import { useEffect, useState, useCallback } from "react";
 import {
-  listRuns, getRun, process,
-  type RunHeader, type RunDetail,
+  listRuns, getRun, getStats, process,
+  type RunHeader, type RunDetail, type AuditStats,
 } from "./api";
+import { Sparkline, Donut, HeatMap } from "./widgets";
 
 const SUBLAYER_COLORS: Record<string, string> = {
   "Analytical Layer": "#5b9cf2",
@@ -12,6 +13,7 @@ const SUBLAYER_COLORS: Record<string, string> = {
 
 export function Dashboard() {
   const [runs, setRuns]         = useState<RunHeader[]>([]);
+  const [stats, setStats]       = useState<AuditStats | null>(null);
   const [selected, setSelected] = useState<RunDetail | null>(null);
   const [error, setError]       = useState<string | null>(null);
   const [busy, setBusy]         = useState(false);
@@ -19,8 +21,9 @@ export function Dashboard() {
 
   const refresh = useCallback(async () => {
     try {
-      const { runs } = await listRuns(50);
+      const [{ runs }, s] = await Promise.all([listRuns(50), getStats(50)]);
       setRuns(runs);
+      setStats(s);
     } catch (e) {
       setError(String(e));
     }
@@ -71,6 +74,8 @@ export function Dashboard() {
       </form>
 
       {error && <div className="error">{error}</div>}
+
+      {stats && stats.total_runs > 0 && <StatsStrip stats={stats} />}
 
       <div className="split">
         <section className="run-list">
@@ -124,6 +129,40 @@ export function Dashboard() {
         </section>
       </div>
     </>
+  );
+}
+
+function StatsStrip({ stats }: { stats: AuditStats }) {
+  const latencies = stats.latency_series.map((p) => p.ms);
+  const clarities = stats.clarity_series.map((p) => p.score);
+  const avgMs = latencies.length
+    ? Math.round(latencies.reduce((a, b) => a + b, 0) / latencies.length)
+    : 0;
+  const avgClarity = clarities.length
+    ? Math.round(clarities.reduce((a, b) => a + b, 0) / clarities.length)
+    : 0;
+
+  return (
+    <section className="stats-strip">
+      <div className="stat-card">
+        <div className="stat-label">Latency (last {latencies.length})</div>
+        <Sparkline values={latencies} stroke="#5b9cf2" fill="rgba(91, 156, 242, 0.18)" />
+        <div className="stat-foot">avg <strong>{avgMs} ms</strong></div>
+      </div>
+      <div className="stat-card">
+        <div className="stat-label">Clarity score</div>
+        <Sparkline values={clarities} stroke="#3ec97f" fill="rgba(62, 201, 127, 0.18)" />
+        <div className="stat-foot">avg <strong>{avgClarity}</strong></div>
+      </div>
+      <div className="stat-card">
+        <div className="stat-label">Routing distribution</div>
+        <Donut data={stats.sublayer_distribution} />
+      </div>
+      <div className="stat-card">
+        <div className="stat-label">Modality × persona</div>
+        <HeatMap matrix={stats.persona_modality_matrix} />
+      </div>
+    </section>
   );
 }
 

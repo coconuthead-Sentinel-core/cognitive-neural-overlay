@@ -247,6 +247,7 @@ def cno_process_stream(req: ProcessRequest):
                 modality=cls.modality.value, request_type=cls.request_type.value, tone=cls.tone.value,
                 sublayer=route.sublayer.value, persona_style=persona.style.value,
                 clarity_score=synth.clarity_score, synthesis_body=synth.body,
+                total_ms=_ms_since(t0),
             )
 
         yield _sse("complete", {"run_id": run_id, "total_ms": _ms_since(t0)})
@@ -271,6 +272,20 @@ def list_audit_runs(limit: int = Query(50, ge=1, le=500), offset: int = Query(0,
         "count": len(runs),
         "runs": [r.__dict__ for r in runs],
     }
+
+
+@app.get("/cno/audit/stats", tags=["audit"])
+def get_audit_stats(window: int = Query(50, ge=1, le=500)):
+    """
+    Aggregated stats for dashboard widgets:
+      - latency_series: total_ms over the most recent `window` runs
+      - clarity_series: clarity_score over the same window
+      - sublayer_distribution: counts by sublayer
+      - persona_modality_matrix: counts by (modality, persona_style)
+    """
+    if PIPELINE.audit is None:
+        raise HTTPException(status_code=503, detail="audit log not configured")
+    return PIPELINE.audit.get_stats(window=window)
 
 
 @app.get("/cno/audit/{run_id}", tags=["audit"])
@@ -301,6 +316,7 @@ def root():
             "GET /cno/state",
             "POST /cno/state/reset",
             "GET /cno/audit",
+            "GET /cno/audit/stats",
             "GET /cno/audit/{run_id}",
             "GET /healthz",
             "GET /docs",

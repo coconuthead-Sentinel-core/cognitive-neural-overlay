@@ -6,9 +6,9 @@
 > the Input Processing Layer (Seed Crystal #17) and downstream services.
 
 ![Status](https://img.shields.io/badge/status-public-success)
-![Version](https://img.shields.io/badge/version-0.2.0-informational)
+![Version](https://img.shields.io/badge/version-0.3.0-informational)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![Tests](https://img.shields.io/badge/tests-37%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-86%20passing-brightgreen)
 ![CSTM](https://img.shields.io/badge/CSTM-v1.0--aligned-purple)
 
 ---
@@ -59,7 +59,7 @@ status:
 | --- | --- |
 | §4 — 10-field metadata frontmatter on emitted artifacts | *planned* |
 | §5 — Zone classification on tags emitted | *planned* |
-| §6 — Session-state envelope on every dispatch | *partial* — pipeline result carries `run_id`, timestamp, classification, routing, anchor, persona, synthesis; full envelope schema TBD |
+| §6 — Session-state envelope on every dispatch | ✅ implemented (best-guess shape) — every `/cno/process` and `/cno/process/stream` returns `{session_id, envelope_version, spec_ref, run_id, ts, glyph_pipeline, prior_run_ids, payload, spec_gaps}`. Send `X-CNO-Session-Id` to chain runs. `spec_gaps` lists open questions to resolve once the canonical §6 spec is on hand. |
 | §7 — Quick-reference behaviors | implemented as module-tag log + persisted audit log on each pipeline run |
 
 ## Endpoints
@@ -72,8 +72,9 @@ status:
 | GET | `/cno/state` | Inspect recent memory anchors (live context stack) |
 | POST | `/cno/state/reset` | Clear the memory stack |
 | GET | `/cno/audit` | List recent runs (header summary, most recent first) |
+| GET | `/cno/audit/stats` | Aggregated metrics for dashboard widgets — sparklines, donut, heat-map |
 | GET | `/cno/audit/{run_id}` | Drill-down: full per-node trace for a single run |
-| GET | `/healthz` | Liveness |
+| GET | `/healthz` | Liveness — also reports `auth_enabled` + `rate_limit_per_minute` |
 | GET | `/` | Service banner + endpoint list |
 | GET | `/docs` | Swagger UI (FastAPI default) |
 | GET | `/ui/` | Browser dashboard (Console + Audit tabs) — only if `cno/static/` is built |
@@ -106,9 +107,53 @@ Two tabs:
 
 ## Persistence + observability
 
-- **SQLite audit log** at `cno_audit.db` (configurable via `CNO_DB_PATH`). Two tables: `runs` (one row per pipeline call) and `audit_log` (5 rows per call, one per node crossing). Append-only.
-- **Structured JSON logs** to stderr, one object per line. Includes `run_id`, `sublayer`, `modality` on every pipeline run.
-- **Memory Node** anchors are still in-process FIFO (max 50 by default). Long-term archival via the planned AMC bridge (Canon #7).
+- **SQLite audit log** at `cno_audit.db` (configurable via `CNO_DB_PATH`). Tables: `runs` (one row per pipeline call, includes `total_ms`) + `audit_log` (5 rows per call, one per node crossing). Append-only. Idempotent migrations on startup.
+- **Structured JSON logs** to stderr, one object per line. Includes `run_id`, `session_id`, `sublayer`, `modality` on every pipeline run.
+- **Memory Node** keeps an in-process FIFO (max 50 entries) *and* ships every anchor to the configured `ArchivalSink`. Sink failures never break the pipeline.
+
+## AMC bridge (Canon #7)
+
+`MemoryNode` accepts an optional `ArchivalSink`. Three implementations live in `cno/sinks.py`:
+
+| Sink | Purpose |
+| --- | --- |
+| `NullSink` | Default — drops anchors silently |
+| `JsonlSink` | Threadsafe append to a JSONL file (durable offline copy) |
+| `HttpAMCSink` | POSTs anchors to `{url}/anchors` (real Canon #7 bridge — *contract pending publication*) |
+
+Configure via env at process start:
+
+```bash
+CNO_AMC_SINK=jsonl                          # null | jsonl | http
+CNO_AMC_JSONL_PATH=./cno_anchors.jsonl      # used when sink=jsonl
+CNO_AMC_URL=https://amc.internal            # used when sink=http
+CNO_AMC_API_KEY=...                         # optional bearer for http sink
+```
+
+## Auth + rate limiting
+
+Disabled by default (single-user dev mode). Enable via env:
+
+```bash
+CNO_API_KEY=your-secret           # X-API-Key header required on all routes except bypass list
+CNO_ALLOWED_ORIGINS=https://...   # CSV of CORS allow-list; defaults to "*"
+CNO_RATE_LIMIT_PER_MINUTE=120     # set to 0 to disable; sliding 60-second window per key/IP
+```
+
+Bypass list (always reachable, no auth/rate-limit): `/healthz`, `/`, `/docs`, `/redoc`, `/openapi.json`, `/ui*`.
+
+## LLM hook (deferred upgrade path)
+
+Each node ships with substantially smarter heuristics — multi-signal modality detection, lexicon-driven tone scoring, multi-factor persona scoring matrix, real per-style synthesis transforms (hedge stripping, bulletization, cadence breaks). All include confidence scores.
+
+When you want to swap heuristics for a real LLM, implement `cno.llm.LLMClassifier`:
+
+```python
+class LLMClassifier(Protocol):
+    def classify(self, text: str, schema: str) -> dict[str, Any]: ...
+```
+
+Pass an instance into `InputNode(llm=...)` (other nodes can be wired the same way). Heuristics remain as fallback if the LLM raises. A worked Anthropic SDK example lives in `cno/llm.py`.
 
 ## Integration map (canon cross-references)
 
@@ -117,7 +162,7 @@ Two tabs:
 | **#17 Seed Crystal — Input Processing Layer** | Front door | Provides input feed to CNO Input Node |
 | **#10 Neural Lattice (NLCA)** | Zone substrate | CNO tags will conform to NLCA zones (planned) |
 | **#16 Glyphic Codex DSL** | Vocabulary | Node tags use glyph encoding (📥 Input, 🔄 Router, 🧊 Memory, 🥥 Persona, 📤 OutputSynth) |
-| **#7 AI_Memory_Core** | Long-term persistence | Planned: CNO Memory Node will delegate archival writes to AMC. Current Memory Node is in-process FIFO only. |
+| **#7 AI_Memory_Core** | Long-term persistence | Bridge implemented: `HttpAMCSink` + `JsonlSink` + `NullSink`. The HTTP sink contract is a stub — confirm path/auth/schema against AMC once that service publishes its API. |
 | **CSTM_Lattice v1.0** (parent spec) | Discipline contract | See *CSTM alignment* section above for current vs. planned coverage |
 
 ## Output format rules (per Sentinel Forge System Core Directive)

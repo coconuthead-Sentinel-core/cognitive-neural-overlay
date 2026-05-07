@@ -21,17 +21,20 @@ def test_root_advertises_5_node_pipeline():
 def test_process_question_routes_to_analysis():
     r = client.post("/cno/process", json={"request": "What is the meaning of canon #18?"})
     assert r.status_code == 200
-    body = r.json()
-    assert body["classification"]["request_type"] == "question"
-    assert body["routing"]["sublayer"] == "Analytical Layer"
-    assert len(body["module_tags"]) == 5
+    env = r.json()
+    assert env["envelope_version"] == "1.0"
+    assert env["spec_ref"].startswith("CSTM_Lattice")
+    payload = env["payload"]
+    assert payload["classification"]["request_type"] == "question"
+    assert payload["routing"]["sublayer"] == "Analytical Layer"
+    assert len(payload["module_tags"]) == 5
 
 
 def test_process_command_routes_to_output():
     r = client.post("/cno/process", json={"request": "Build the codebase now."})
-    body = r.json()
-    assert body["classification"]["request_type"] == "command"
-    assert body["routing"]["sublayer"] == "Output Layer"
+    payload = r.json()["payload"]
+    assert payload["classification"]["request_type"] == "command"
+    assert payload["routing"]["sublayer"] == "Output Layer"
 
 
 def test_state_endpoint_returns_anchors():
@@ -46,7 +49,7 @@ def test_state_endpoint_returns_anchors():
 def test_modality_hint_accepted():
     r = client.post("/cno/process", json={"request": "test", "modality_hint": "voice"})
     assert r.status_code == 200
-    assert r.json()["classification"]["modality"] == "voice"
+    assert r.json()["payload"]["classification"]["modality"] == "voice"
 
 
 def test_modality_hint_invalid_returns_422():

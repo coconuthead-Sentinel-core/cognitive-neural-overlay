@@ -28,17 +28,30 @@ export interface RunDetail {
   crossings: AuditEntry[];
 }
 
-export interface ProcessResult {
+export interface PipelinePayload {
   run_id: string;
   request: string;
-  classification: Record<string, unknown>;
-  routing: Record<string, unknown>;
-  memory_anchor: Record<string, unknown>;
+  classification:    Record<string, unknown>;
+  routing:           Record<string, unknown>;
+  memory_anchor?:    Record<string, unknown>;
   persona_selection: Record<string, unknown>;
-  synthesis: Record<string, unknown>;
-  module_tags: string[];
-  timestamp: string;
-  glyph_pipeline: string;
+  synthesis:         Record<string, unknown>;
+  module_tags?:      string[];
+  timestamp?:        string;
+  glyph_pipeline?:   string;
+  total_ms?:         number;
+}
+
+export interface SessionEnvelope {
+  session_id:       string;
+  envelope_version: string;   // "1.0"
+  spec_ref:         string;   // "CSTM_Lattice v1.0 §6"
+  run_id:           string;
+  ts:               string;
+  glyph_pipeline:   string;
+  prior_run_ids:    string[];
+  payload:          PipelinePayload;
+  spec_gaps:        string[];
 }
 
 const headers = { "Content-Type": "application/json" };
@@ -71,10 +84,11 @@ export async function getStats(window = 50): Promise<AuditStats> {
   return res.json();
 }
 
-export async function process(request: string): Promise<ProcessResult> {
+export async function process(request: string, sessionId?: string): Promise<SessionEnvelope> {
+  const h = sessionId ? { ...headers, "X-CNO-Session-Id": sessionId } : headers;
   const res = await fetch(`/cno/process`, {
     method: "POST",
-    headers,
+    headers: h,
     body: JSON.stringify({ request }),
   });
   if (!res.ok) throw new Error(`process failed: ${res.status}`);
@@ -84,14 +98,15 @@ export async function process(request: string): Promise<ProcessResult> {
 // --- SSE streaming ---
 
 export type StreamEvent =
-  | { event: "start";    data: { run_id: string; request: string } }
+  | { event: "start";    data: { run_id: string; session_id: string; request: string } }
   | { event: "node";     data: { step: number; node: string; glyph: string; elapsed_ms: number; output: Record<string, unknown> } }
-  | { event: "complete"; data: { run_id: string; total_ms: number } };
+  | { event: "complete"; data: SessionEnvelope };
 
-export async function* processStream(request: string): AsyncGenerator<StreamEvent> {
+export async function* processStream(request: string, sessionId?: string): AsyncGenerator<StreamEvent> {
+  const h = sessionId ? { ...headers, "X-CNO-Session-Id": sessionId } : headers;
   const res = await fetch(`/cno/process/stream`, {
     method: "POST",
-    headers,
+    headers: h,
     body: JSON.stringify({ request }),
   });
   if (!res.ok || !res.body) throw new Error(`stream failed: ${res.status}`);

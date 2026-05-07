@@ -53,7 +53,7 @@ export function Console() {
             return next;
           });
         } else if (evt.event === "complete") {
-          setTotalMs(evt.data.total_ms);
+          setTotalMs(evt.data.payload.total_ms ?? null);
         }
       }
     } catch (e) {

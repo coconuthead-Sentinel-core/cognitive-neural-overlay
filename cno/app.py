@@ -14,13 +14,14 @@ import uuid
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .config import SETTINGS
+from .envelope import REGISTRY, envelope_to_dict, wrap
 from .logging_config import configure_logging
 from .middleware import APIKeyMiddleware, RateLimitMiddleware
 from .nodes import Modality, PersonaStyle, RequestType, Sublayer
@@ -80,8 +81,24 @@ def healthz():
     }
 
 
+def _payload_dict(result) -> dict:
+    """CNOPipelineResult -> JSON-safe dict (FastAPI normally does this for us)."""
+    return {
+        "run_id":            result.run_id,
+        "request":           result.request,
+        "classification":    result.classification,
+        "routing":           result.routing,
+        "memory_anchor":     result.memory_anchor,
+        "persona_selection": result.persona_selection,
+        "synthesis":         result.synthesis,
+        "module_tags":       result.module_tags,
+        "timestamp":         result.timestamp,
+        "glyph_pipeline":    result.glyph_pipeline,
+    }
+
+
 @app.post("/cno/process", tags=["pipeline"])
-def cno_process(req: ProcessRequest):
+def cno_process(req: ProcessRequest, x_cno_session_id: str | None = Header(default=None)):
     modality = None
     if req.modality_hint:
         try:
@@ -89,15 +106,28 @@ def cno_process(req: ProcessRequest):
         except ValueError:
             raise HTTPException(status_code=422, detail=f"unknown modality: {req.modality_hint}")
     result = PIPELINE.process(req.request, req.draft_response, modality)
+
+    session_id = REGISTRY.session_for(x_cno_session_id)
+    prior      = REGISTRY.append_run(session_id, result.run_id)
+    envelope   = wrap(
+        payload        = _payload_dict(result),
+        run_id         = result.run_id,
+        ts             = result.timestamp,
+        glyph_pipeline = result.glyph_pipeline,
+        session_id     = session_id,
+        prior_run_ids  = prior,
+    )
+
     log.info(
         "pipeline_run",
         extra={
-            "run_id": result.run_id,
-            "sublayer": result.routing["sublayer"],
-            "modality": result.classification["modality"],
+            "run_id":     result.run_id,
+            "session_id": session_id,
+            "sublayer":   result.routing["sublayer"],
+            "modality":   result.classification["modality"],
         },
     )
-    return result
+    return envelope_to_dict(envelope)
 
 
 @app.get("/cno/state", tags=["state"])
@@ -199,10 +229,10 @@ def _sse(event: str, data: dict) -> bytes:
 
 
 @app.post("/cno/process/stream", tags=["pipeline"])
-def cno_process_stream(req: ProcessRequest):
+def cno_process_stream(req: ProcessRequest, x_cno_session_id: str | None = Header(default=None)):
     """
     Server-Sent Events stream. Emits one `node` event per node crossing as the
-    pipeline runs, then a final `complete` event with the run_id.
+    pipeline runs, then a final `complete` event carrying the CSTM §6 envelope.
     """
     modality = None
     if req.modality_hint:
@@ -211,9 +241,11 @@ def cno_process_stream(req: ProcessRequest):
         except ValueError:
             raise HTTPException(status_code=422, detail=f"unknown modality: {req.modality_hint}")
 
+    session_id = REGISTRY.session_for(x_cno_session_id)
+
     def gen():
         run_id = uuid.uuid4().hex
-        yield _sse("start", {"run_id": run_id, "request": req.request[:500]})
+        yield _sse("start", {"run_id": run_id, "session_id": session_id, "request": req.request[:500]})
 
         t0 = time.perf_counter()
         cls = PIPELINE.input.classify(req.request, modality_hint=modality)
@@ -269,7 +301,25 @@ def cno_process_stream(req: ProcessRequest):
                 total_ms=_ms_since(t0),
             )
 
-        yield _sse("complete", {"run_id": run_id, "total_ms": _ms_since(t0)})
+        prior = REGISTRY.append_run(session_id, run_id)
+        envelope = wrap(
+            payload={
+                "run_id":            run_id,
+                "request":           req.request[:500],
+                "classification":    cls_payload,
+                "routing":           route_payload,
+                "memory_anchor":     anchor_payload,
+                "persona_selection": persona_payload,
+                "synthesis":         synth_payload,
+                "total_ms":          _ms_since(t0),
+            },
+            run_id=run_id,
+            ts=anchor_payload["timestamp"],
+            glyph_pipeline="📥 → 🔄 → 🧊 → 🥥 → 📤",
+            session_id=session_id,
+            prior_run_ids=prior,
+        )
+        yield _sse("complete", envelope_to_dict(envelope))
 
     return StreamingResponse(gen(), media_type="text/event-stream", headers={
         "Cache-Control": "no-cache",

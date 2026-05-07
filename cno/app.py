@@ -1,5 +1,5 @@
 """
-FastAPI surface for CNO. Exposes the 5-node pipeline + audit log.
+FastAPI surface for CNO. Exposes the 5-node pipeline + audit log + per-node endpoints.
 
 Run:
     uvicorn cno.app:app --reload
@@ -7,17 +7,24 @@ Run:
 """
 
 from __future__ import annotations
+import json
 import logging
+import time
+import uuid
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .logging_config import configure_logging
-from .nodes import Modality
+from .nodes import Modality, PersonaStyle, RequestType, Sublayer
+from .nodes.input_node import InputClassification, Tone
+from .nodes.persona_node import PersonaSelection
+from .nodes.router_node import RoutingDecision
 from .pipeline import PIPELINE
 
 
@@ -93,6 +100,167 @@ def reset_state():
     return {"status": "reset"}
 
 
+@app.post("/cno/node/{node_name}", tags=["pipeline"])
+def run_single_node(node_name: str, body: dict[str, Any]):
+    """
+    Run exactly one node in isolation. Body shape varies by node:
+      input:   {request: str, modality_hint?: str}
+      router:  {modality, request_type, tone, raw_length?}
+      memory:  {summary: str, request_type?: str, tone?: str}
+      persona: {classification: {...}, routing: {...}}
+      synth:   {draft: str, persona_style: str}
+    """
+    try:
+        if node_name == "input":
+            modality = Modality(body["modality_hint"]) if body.get("modality_hint") else None
+            cls = PIPELINE.input.classify(body["request"], modality_hint=modality)
+            return {"node": "input", "glyph": "📥", "output": _classification_dict(cls)}
+
+        if node_name == "router":
+            cls = InputClassification(
+                modality=Modality(body["modality"]),
+                request_type=RequestType(body["request_type"]),
+                tone=Tone(body["tone"]),
+                raw_length=int(body.get("raw_length", 0)),
+            )
+            decision = PIPELINE.router.route(cls)
+            return {"node": "router", "glyph": "🔄", "output": {"sublayer": decision.sublayer.value, "rationale": decision.rationale}}
+
+        if node_name == "memory":
+            anchor = PIPELINE.memory.anchor(
+                summary=body["summary"],
+                request_type=body.get("request_type", "unknown"),
+                tone=body.get("tone", "neutral"),
+            )
+            return {"node": "memory", "glyph": "🧊", "output": {
+                "timestamp": anchor.timestamp, "summary": anchor.summary,
+                "request_type": anchor.request_type, "tone": anchor.tone,
+            }}
+
+        if node_name == "persona":
+            c = body["classification"]
+            r = body["routing"]
+            cls = InputClassification(
+                modality=Modality(c["modality"]),
+                request_type=RequestType(c["request_type"]),
+                tone=Tone(c["tone"]),
+                raw_length=int(c.get("raw_length", 0)),
+            )
+            decision = RoutingDecision(sublayer=Sublayer(r["sublayer"]), rationale=r.get("rationale", ""))
+            persona = PIPELINE.persona.select(cls, decision)
+            return {"node": "persona", "glyph": "🥥", "output": {"style": persona.style.value, "rationale": persona.rationale}}
+
+        if node_name == "synth":
+            persona = PersonaSelection(
+                style=PersonaStyle(body["persona_style"]),
+                rationale=body.get("rationale", ""),
+            )
+            synth = PIPELINE.synth.synthesize(body["draft"], persona)
+            return {"node": "synth", "glyph": "📤", "output": {
+                "body": synth.body, "clarity_score": synth.clarity_score, "style_applied": synth.style_applied,
+            }}
+
+        raise HTTPException(status_code=404, detail=f"unknown node: {node_name}")
+
+    except (KeyError, ValueError) as e:
+        raise HTTPException(status_code=422, detail=f"invalid payload for node '{node_name}': {e}")
+
+
+def _classification_dict(cls: InputClassification) -> dict:
+    return {
+        "modality":     cls.modality.value,
+        "request_type": cls.request_type.value,
+        "tone":         cls.tone.value,
+        "raw_length":   cls.raw_length,
+    }
+
+
+def _sse(event: str, data: dict) -> bytes:
+    return f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n".encode("utf-8")
+
+
+@app.post("/cno/process/stream", tags=["pipeline"])
+def cno_process_stream(req: ProcessRequest):
+    """
+    Server-Sent Events stream. Emits one `node` event per node crossing as the
+    pipeline runs, then a final `complete` event with the run_id.
+    """
+    modality = None
+    if req.modality_hint:
+        try:
+            modality = Modality(req.modality_hint)
+        except ValueError:
+            raise HTTPException(status_code=422, detail=f"unknown modality: {req.modality_hint}")
+
+    def gen():
+        run_id = uuid.uuid4().hex
+        yield _sse("start", {"run_id": run_id, "request": req.request[:500]})
+
+        t0 = time.perf_counter()
+        cls = PIPELINE.input.classify(req.request, modality_hint=modality)
+        cls_payload = _classification_dict(cls)
+        yield _sse("node", {"step": 1, "node": "input", "glyph": "📥",
+                            "elapsed_ms": _ms_since(t0), "output": cls_payload})
+        if PIPELINE.audit:
+            PIPELINE.audit.record_node_crossing(run_id, 1, "input", {"request": req.request[:200]}, cls_payload)
+
+        t1 = time.perf_counter()
+        route = PIPELINE.router.route(cls)
+        route_payload = {"sublayer": route.sublayer.value, "rationale": route.rationale}
+        yield _sse("node", {"step": 2, "node": "router", "glyph": "🔄",
+                            "elapsed_ms": _ms_since(t1), "output": route_payload})
+        if PIPELINE.audit:
+            PIPELINE.audit.record_node_crossing(run_id, 2, "router", cls_payload, route_payload)
+
+        t2 = time.perf_counter()
+        anchor = PIPELINE.memory.anchor(summary=req.request[:200],
+                                        request_type=cls.request_type.value, tone=cls.tone.value)
+        anchor_payload = {"timestamp": anchor.timestamp, "summary": anchor.summary}
+        yield _sse("node", {"step": 3, "node": "memory", "glyph": "🧊",
+                            "elapsed_ms": _ms_since(t2), "output": anchor_payload})
+        if PIPELINE.audit:
+            PIPELINE.audit.record_node_crossing(run_id, 3, "memory", {"summary": anchor.summary}, anchor_payload)
+
+        t3 = time.perf_counter()
+        persona = PIPELINE.persona.select(cls, route)
+        persona_payload = {"style": persona.style.value, "rationale": persona.rationale}
+        yield _sse("node", {"step": 4, "node": "persona", "glyph": "🥥",
+                            "elapsed_ms": _ms_since(t3), "output": persona_payload})
+        if PIPELINE.audit:
+            PIPELINE.audit.record_node_crossing(run_id, 4, "persona",
+                                                {"classification": cls_payload, "routing": route_payload},
+                                                persona_payload)
+
+        t4 = time.perf_counter()
+        draft = req.draft_response or f"[draft based on {route.sublayer.value} routing of: {req.request[:100]}]"
+        synth = PIPELINE.synth.synthesize(draft, persona)
+        synth_payload = {"body": synth.body[:500], "clarity_score": synth.clarity_score,
+                         "style_applied": synth.style_applied}
+        yield _sse("node", {"step": 5, "node": "synth", "glyph": "📤",
+                            "elapsed_ms": _ms_since(t4), "output": synth_payload})
+        if PIPELINE.audit:
+            PIPELINE.audit.record_node_crossing(run_id, 5, "synth",
+                                                {"draft": draft[:200], "persona": persona_payload},
+                                                synth_payload)
+            PIPELINE.audit.record_run_header(
+                run_id=run_id, request=req.request,
+                modality=cls.modality.value, request_type=cls.request_type.value, tone=cls.tone.value,
+                sublayer=route.sublayer.value, persona_style=persona.style.value,
+                clarity_score=synth.clarity_score, synthesis_body=synth.body,
+            )
+
+        yield _sse("complete", {"run_id": run_id, "total_ms": _ms_since(t0)})
+
+    return StreamingResponse(gen(), media_type="text/event-stream", headers={
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+    })
+
+
+def _ms_since(t0: float) -> int:
+    return int((time.perf_counter() - t0) * 1000)
+
+
 @app.get("/cno/audit", tags=["audit"])
 def list_audit_runs(limit: int = Query(50, ge=1, le=500), offset: int = Query(0, ge=0)):
     """List recent runs (header summary). Most recent first."""
@@ -128,6 +296,8 @@ def root():
         "parent_spec": "Sentient Quantum Architecture v8.0",
         "endpoints":   [
             "POST /cno/process",
+            "POST /cno/process/stream",
+            "POST /cno/node/{node_name}",
             "GET /cno/state",
             "POST /cno/state/reset",
             "GET /cno/audit",

@@ -14,3 +14,14 @@ Thumbs.db
 desktop.ini
 .vscode/
 .idea/
+
+# Built frontend bundle (regenerate with `cd frontend && npm run build`)
+cno/static/
+
+# Runtime SQLite audit DB
+cno_audit.db
+cno_audit.db-journal
+*.sqlite
+
+# Node deps
+node_modules/

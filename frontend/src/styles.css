@@ -1,0 +1,251 @@
+:root {
+  --bg:       #0c0f16;
+  --panel:    #141925;
+  --panel-2:  #1b2230;
+  --border:   #2a3344;
+  --text:     #e6ecf5;
+  --muted:    #8b95a8;
+  --accent:   #5b9cf2;
+  --error:    #f25b6a;
+  --code:     #0a0d14;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+}
+
+.layout {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 20px 24px 60px;
+}
+
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 12px;
+  margin-bottom: 16px;
+}
+
+header h1 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 600;
+}
+
+.glyph-pipeline {
+  font-size: 18px;
+  letter-spacing: 4px;
+}
+
+.prompt-bar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.prompt-bar input {
+  flex: 1;
+  padding: 10px 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 14px;
+}
+
+.prompt-bar input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+button {
+  padding: 10px 18px;
+  background: var(--accent);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: 500;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+button.secondary {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+.error {
+  background: rgba(242, 91, 106, 0.12);
+  border: 1px solid var(--error);
+  color: var(--error);
+  padding: 10px 12px;
+  border-radius: 4px;
+  margin-bottom: 12px;
+}
+
+.split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px;
+}
+
+@media (max-width: 1000px) {
+  .split { grid-template-columns: 1fr; }
+}
+
+.run-list, .drill-down {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px 16px;
+  min-height: 400px;
+}
+
+h2 {
+  margin: 0 0 12px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th {
+  text-align: left;
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 500;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+td {
+  padding: 8px;
+  border-bottom: 1px solid var(--panel-2);
+  vertical-align: top;
+}
+
+tbody tr {
+  cursor: pointer;
+}
+
+tbody tr:hover {
+  background: var(--panel-2);
+}
+
+tbody tr.selected {
+  background: rgba(91, 156, 242, 0.15);
+}
+
+.truncate {
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chip {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  color: #0c0f16;
+  font-weight: 600;
+}
+
+.muted { color: var(--muted); }
+
+.run-meta {
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+.run-meta code {
+  background: var(--code);
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+.quoted {
+  background: var(--code);
+  border-left: 3px solid var(--accent);
+  padding: 8px 12px;
+  margin: 0 0 16px;
+  font-style: italic;
+}
+
+.crossings {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.crossing {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 8px 12px;
+}
+
+.crossing-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.crossing-head strong {
+  text-transform: capitalize;
+}
+
+.big-glyph {
+  font-size: 18px;
+}
+
+.payload-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.payload-pair h4 {
+  margin: 0 0 4px;
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+
+pre {
+  background: var(--code);
+  padding: 8px;
+  margin: 0;
+  border-radius: 3px;
+  font-size: 11px;
+  font-family: "SF Mono", Consolas, Monaco, monospace;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #c9d2e0;
+  max-height: 200px;
+  overflow-y: auto;
+}

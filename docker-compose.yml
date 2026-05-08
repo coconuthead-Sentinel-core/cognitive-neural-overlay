@@ -1,0 +1,36 @@
+services:
+  cno:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: cno:0.3.0
+    container_name: cno
+    restart: unless-stopped
+    ports:
+      - "${HOST_PORT:-8000}:8000"
+    env_file:
+      - .env
+    environment:
+      # Defaults shown — uncomment / override via .env for prod.
+      CNO_DB_PATH:           /data/cno_audit.db
+      CNO_AMC_JSONL_PATH:    /data/cno_anchors.jsonl
+      # CNO_API_KEY:               # set in .env
+      # CNO_ALLOWED_ORIGINS:       # set in .env (CSV)
+      # CNO_RATE_LIMIT_PER_MINUTE: # default 120
+      # CNO_AMC_SINK:              # null | jsonl | http (default null)
+      # CNO_AMC_URL:               # required when CNO_AMC_SINK=http
+      # CNO_AMC_API_KEY:           # optional bearer for http sink
+      # Default 1 worker — Memory Node is per-process. Raise only after the
+      # in-memory FIFO is moved to shared storage (Redis / SQLite-backed).
+      UVICORN_WORKERS: "1"
+    volumes:
+      - cno-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  cno-data:

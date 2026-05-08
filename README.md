@@ -155,6 +155,61 @@ class LLMClassifier(Protocol):
 
 Pass an instance into `InputNode(llm=...)` (other nodes can be wired the same way). Heuristics remain as fallback if the LLM raises. A worked Anthropic SDK example lives in `cno/llm.py`.
 
+## Deployment
+
+Two paths — pick whichever matches your target.
+
+### A. Docker (recommended for any cloud)
+
+```bash
+cp .env.example .env        # then edit .env to set CNO_API_KEY, CORS, etc.
+docker compose up -d --build
+docker compose logs -f cno  # tail output
+# open http://localhost:8000/ui/
+```
+
+What this gives you:
+
+- Multi-stage build: stage 1 builds the React bundle, stage 2 ships the Python runtime — final image carries only what's needed.
+- Persistent volume `cno-data` at `/data/` for the SQLite audit DB (`cno_audit.db`) and the optional JSONL anchor log (`cno_anchors.jsonl`).
+- Non-root container user (`cno:cno`) for least privilege.
+- Built-in HEALTHCHECK against `/healthz`.
+- Honors every `CNO_*` env var from `.env`.
+
+The image is platform-portable. Push the same image to **Fly.io / Railway / Render / AWS Fargate / GCP Cloud Run / a VPS** without code changes — only `.env` and the platform's volume binding change.
+
+### B. Bare metal / VM (no Docker)
+
+```bash
+pip install -r requirements.txt
+cp .env.example .env        # edit
+./scripts/run_prod.sh       # auto-builds the frontend if missing, runs uvicorn
+```
+
+The runner script reads `.env`, builds the frontend bundle if it isn't present, and starts uvicorn with `--proxy-headers` so it works behind a reverse proxy (nginx/Caddy/Traefik).
+
+### Configuration reference
+
+All knobs live in `.env`. See `.env.example` for the full list with comments. Production checklist:
+
+| Setting | Why it matters |
+| --- | --- |
+| `CNO_API_KEY=...` | Without it, every endpoint is open to the internet |
+| `CNO_ALLOWED_ORIGINS=...` | Tighten CORS to your real frontend hosts |
+| `CNO_RATE_LIMIT_PER_MINUTE=` | Default 120/min; raise/lower based on expected load |
+| `CNO_AMC_SINK=jsonl` or `http` | Turn on archival; `null` (default) discards anchors |
+| `UVICORN_WORKERS=1` | **Keep at 1** until the in-process Memory Node FIFO is moved to shared storage. Multi-worker is safe for the audit log (SQLite handles it) but the live context stack is per-process. |
+
+### TLS / reverse proxy
+
+Don't terminate TLS in uvicorn. Put nginx, Caddy, or your platform's load balancer in front. Sample Caddy config:
+
+```caddy
+cno.example.com {
+    reverse_proxy localhost:8000
+}
+```
+
 ## Integration map (canon cross-references)
 
 | Canon # | Project | How CNO connects |

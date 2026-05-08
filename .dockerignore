@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+
+# Tests + dev artifacts (not needed in the image)
+tests/
+.git/
+.gitignore
+.github/
+
+# Frontend build artifacts that the multi-stage build regenerates
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/*.tsbuildinfo
+frontend/vite.config.d.ts
+frontend/vite.config.js
+
+# Built static bundle — Stage 1 produces a fresh copy
+cno/static/
+
+# Local runtime artifacts
+cno_audit.db
+cno_audit.db-journal
+cno_anchors.jsonl
+*.sqlite
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Secrets — never bake into the image
+.env
+.env.*
+*.pem
+*.key

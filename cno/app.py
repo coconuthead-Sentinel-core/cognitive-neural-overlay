@@ -16,13 +16,14 @@ from typing import Any, Optional
 
 from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .config import SETTINGS
 from .envelope import REGISTRY, envelope_to_dict, wrap
 from .logging_config import configure_logging
+from .metadata import make_metadata, render_artifact, to_dict as metadata_to_dict
 from .middleware import APIKeyMiddleware, RateLimitMiddleware
 from .nodes import Modality, PersonaStyle, RequestType, Sublayer
 from .nodes.input_node import InputClassification, Tone
@@ -109,8 +110,15 @@ def cno_process(req: ProcessRequest, x_cno_session_id: str | None = Header(defau
 
     session_id = REGISTRY.session_for(x_cno_session_id)
     prior      = REGISTRY.append_run(session_id, result.run_id)
-    envelope   = wrap(
-        payload        = _payload_dict(result),
+
+    payload = _payload_dict(result)
+    payload["metadata"] = metadata_to_dict(make_metadata(
+        run_id=result.run_id, ts=result.timestamp,
+        session_id=session_id,
+    ))
+
+    envelope = wrap(
+        payload        = payload,
         run_id         = result.run_id,
         ts             = result.timestamp,
         glyph_pipeline = result.glyph_pipeline,
@@ -366,6 +374,56 @@ def get_audit_stats(window: int = Query(50, ge=1, le=500)):
     if PIPELINE.audit is None:
         raise HTTPException(status_code=503, detail="audit log not configured")
     return PIPELINE.audit.get_stats(window=window)
+
+
+@app.post("/cno/audit/backup", tags=["audit"])
+def backup_audit_db(dest: str | None = Query(None, description="optional destination filename")):
+    """
+    Online snapshot of the SQLite audit DB. Safe to call while the DB is being
+    written. Default destination: backups/cno_audit-<UTCtimestamp>.db next to
+    the live DB. Returns the absolute path of the snapshot.
+    """
+    if PIPELINE.audit is None:
+        raise HTTPException(status_code=503, detail="audit log not configured")
+
+    from datetime import datetime, timezone
+    from pathlib import Path
+
+    live = PIPELINE.audit.db_path
+    if dest:
+        target = Path(dest)
+    else:
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        target = live.parent / "backups" / f"{live.stem}-{stamp}{live.suffix}"
+
+    written = PIPELINE.audit.backup(target)
+    return {"backup_path": str(written.resolve()), "size_bytes": written.stat().st_size}
+
+
+@app.get("/cno/artifact/{run_id}", tags=["audit"], response_class=PlainTextResponse)
+def get_artifact(run_id: str):
+    """
+    CSTM §4 emitted artifact: markdown body with 10-field YAML frontmatter.
+    Suitable for archival, downstream ingestion, or pasting into a wiki.
+    """
+    if PIPELINE.audit is None:
+        raise HTTPException(status_code=503, detail="audit log not configured")
+    header = PIPELINE.audit.get_run(run_id)
+    if header is None:
+        raise HTTPException(status_code=404, detail=f"run not found: {run_id}")
+
+    md = make_metadata(run_id=header.run_id, ts=header.ts)
+    body = (
+        f"# CNO pipeline run\n\n"
+        f"**Request:** {header.request}\n\n"
+        f"**Routing:** {header.sublayer} (modality={header.modality}, "
+        f"type={header.request_type}, tone={header.tone})\n\n"
+        f"**Persona:** {header.persona_style} · "
+        f"**Clarity:** {header.clarity_score} · "
+        f"**Total:** {header.total_ms or '—'} ms\n\n"
+        f"## Synthesis\n\n{header.synthesis_body}\n"
+    )
+    return render_artifact(md, body)
 
 
 @app.get("/cno/audit/{run_id}", tags=["audit"])

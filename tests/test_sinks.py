@@ -106,9 +106,19 @@ def test_memory_node_without_sink_still_works():
     assert a.summary == "plain"
 
 
-# --- HTTP sink (defensive smoke) ---
+# --- HTTP sink (defensive) ---
 
 def test_http_sink_post_failure_swallowed():
-    """No real network; assert that connect-refused-style errors don't propagate."""
-    sink = HttpAMCSink("http://127.0.0.1:1/")  # port 1 = nothing listening
+    """Sink must swallow client errors instead of breaking the pipeline.
+
+    Constructed with an unreachable URL, then we replace the inner httpx.Client.post
+    with a stub that raises — guaranteed-deterministic, no network or DNS dependency.
+    """
+    sink = HttpAMCSink("http://example.invalid/")
+
+    class _BoomClient:
+        def post(self, *_args, **_kwargs):
+            raise RuntimeError("simulated transport failure")
+
+    sink._client = _BoomClient()
     sink.persist({"summary": "no-route"})  # must not raise

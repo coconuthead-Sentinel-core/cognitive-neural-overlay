@@ -151,6 +151,20 @@ class AuditLog:
             conn.execute("DELETE FROM audit_log")
             conn.execute("DELETE FROM runs")
 
+    def backup(self, dest: Path) -> Path:
+        """
+        Online snapshot via SQLite's backup API. Safe to call while the DB is
+        being written. Returns the destination path.
+
+        Caller controls the destination path (timestamped names belong in the
+        cron script, not here — keeps this method idempotent).
+        """
+        import sqlite3
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(self.db_path) as src, sqlite3.connect(dest) as dst:
+            src.backup(dst)
+        return dest
+
     def get_stats(self, window: int = 50) -> dict:
         """
         Aggregated stats for dashboard widgets.

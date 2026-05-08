@@ -8,7 +8,9 @@
 ![Status](https://img.shields.io/badge/status-public-success)
 ![Version](https://img.shields.io/badge/version-0.3.0-informational)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![Tests](https://img.shields.io/badge/tests-86%20passing-brightgreen)
+![Backend tests](https://img.shields.io/badge/backend%20tests-100%20passing-brightgreen)
+![Frontend tests](https://img.shields.io/badge/frontend%20tests-15%20passing-brightgreen)
+[![CI](https://github.com/coconuthead-Sentinel-core/cognitive-neural-overlay/actions/workflows/ci.yml/badge.svg)](https://github.com/coconuthead-Sentinel-core/cognitive-neural-overlay/actions/workflows/ci.yml)
 ![CSTM](https://img.shields.io/badge/CSTM-v1.0--aligned-purple)
 
 ---
@@ -57,7 +59,7 @@ status:
 
 | CSTM section | Status |
 | --- | --- |
-| §4 — 10-field metadata frontmatter on emitted artifacts | *planned* |
+| §4 — 10-field metadata frontmatter on emitted artifacts | ✅ implemented (best-guess shape) — `cno/metadata.py` defines a 10-field `ArtifactMetadata` dataclass and `GET /cno/artifact/{run_id}` returns markdown with that frontmatter on any persisted run. Carries a `spec_gaps` field listing open questions to resolve once the canonical §4 spec is on hand (current gaps: exact field set + ordering, checksum algorithm, zone field source, artifact_type enum vs. free-text). |
 | §5 — Zone classification on tags emitted | *planned* |
 | §6 — Session-state envelope on every dispatch | ✅ implemented (best-guess shape) — every `/cno/process` and `/cno/process/stream` returns `{session_id, envelope_version, spec_ref, run_id, ts, glyph_pipeline, prior_run_ids, payload, spec_gaps}`. Send `X-CNO-Session-Id` to chain runs. `spec_gaps` lists open questions to resolve once the canonical §6 spec is on hand. |
 | §7 — Quick-reference behaviors | implemented as module-tag log + persisted audit log on each pipeline run |
@@ -74,6 +76,8 @@ status:
 | GET | `/cno/audit` | List recent runs (header summary, most recent first) |
 | GET | `/cno/audit/stats` | Aggregated metrics for dashboard widgets — sparklines, donut, heat-map |
 | GET | `/cno/audit/{run_id}` | Drill-down: full per-node trace for a single run |
+| POST | `/cno/audit/backup` | Online SQLite snapshot of the audit DB (see *Backup utility* below). **Auth-gated** — not in the bypass list; requires `X-API-Key` when `CNO_API_KEY` is set. |
+| GET | `/cno/artifact/{run_id}` | CSTM §4 emitted artifact: markdown body with 10-field YAML frontmatter (suitable for archival or downstream ingestion). |
 | GET | `/healthz` | Liveness — also reports `auth_enabled` + `rate_limit_per_minute` |
 | GET | `/` | Service banner + endpoint list |
 | GET | `/docs` | Swagger UI (FastAPI default) |
@@ -96,6 +100,9 @@ npm run build       # bundles into ../cno/static/
 
 # Frontend dev with hot reload (proxies /cno/* to :8000):
 npm run dev         # http://localhost:5173
+
+# Frontend tests
+npm test            # vitest + jsdom + testing-library
 ```
 
 ## Dashboard
@@ -110,6 +117,25 @@ Two tabs:
 - **SQLite audit log** at `cno_audit.db` (configurable via `CNO_DB_PATH`). Tables: `runs` (one row per pipeline call, includes `total_ms`) + `audit_log` (5 rows per call, one per node crossing). Append-only. Idempotent migrations on startup.
 - **Structured JSON logs** to stderr, one object per line. Includes `run_id`, `session_id`, `sublayer`, `modality` on every pipeline run.
 - **Memory Node** keeps an in-process FIFO (max 50 entries) *and* ships every anchor to the configured `ArchivalSink`. Sink failures never break the pipeline.
+
+## Backup utility
+
+The audit DB ships with an **online backup path** that uses SQLite's native `backup()` API — safe to call while the service is serving traffic.
+
+- **HTTP** — `POST /cno/audit/backup` writes a snapshot under `backups/cno_audit-<UTCtimestamp>.db` next to the live DB and returns `{backup_path, size_bytes}`. Pass `?dest=/abs/path.db` to override the destination. **Auth-gated** by `CNO_API_KEY` when auth is enabled.
+- **CLI / cron** — `scripts/backup_db.sh` is a thin wrapper that hits the same code path without HTTP. Suitable for a nightly cron entry.
+
+Restore is a plain file copy: stop the service, swap the live DB for the snapshot, restart.
+
+## Continuous integration
+
+`.github/workflows/ci.yml` runs three jobs on every push and pull request to `main`:
+
+1. **`backend`** — Python 3.12, installs `requirements.txt`, runs `pytest -v`.
+2. **`frontend`** — Node 20, runs `npm ci`, `npm test` (vitest), and `npm run build` (production bundle must compile).
+3. **`docker`** — builds the multi-stage Dockerfile end-to-end (the one place a Docker host actually exercises the image).
+
+The CI badge at the top of this README is the source of truth for current build status.
 
 ## AMC bridge (Canon #7)
 
@@ -140,7 +166,7 @@ CNO_ALLOWED_ORIGINS=https://...   # CSV of CORS allow-list; defaults to "*"
 CNO_RATE_LIMIT_PER_MINUTE=120     # set to 0 to disable; sliding 60-second window per key/IP
 ```
 
-Bypass list (always reachable, no auth/rate-limit): `/healthz`, `/`, `/docs`, `/redoc`, `/openapi.json`, `/ui*`.
+Bypass list (always reachable, no auth/rate-limit): `/healthz`, `/`, `/docs`, `/redoc`, `/openapi.json`, `/ui*`. **`/cno/audit/backup` is intentionally *not* in this list** — backups are an authenticated operation when auth is enabled.
 
 ## LLM hook (deferred upgrade path)
 
